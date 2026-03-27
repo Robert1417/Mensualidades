@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Dashboard Anual - Mensualidades", layout="wide")
 
-DATA_PATH_PARQUET = "data/df_cc.parquet"
+DATA_PATH_PARQUET = "df_cc.parquet"
 DATA_PATH_CSV = "data/df_cc.csv"
 
 
