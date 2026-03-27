@@ -4,41 +4,12 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="Cosechas Mensualidades", layout="wide")
+st.set_page_config(page_title="Dashboard Anual - Mensualidades", layout="wide")
 
-# =========================================================
-# CONFIG
-# =========================================================
-DATA_PATH_PARQUET = "df_cc.parquet"
+DATA_PATH_PARQUET = "data/df_cc.parquet"
 DATA_PATH_CSV = "data/df_cc.csv"
 
-COLUMNAS_ESPERADAS = {
-    "Referencia": "Referencia",
-    "Credito": "Credito",
-    "Tipo de comision": "Tipo de comision",
-    "Fecha de cobro": "Fecha de cobro",
-    "Monto": "Monto",
-    "Apartado Mensual": "Apartado Mensual",
-    "Vehiculo de ahorro": "Vehiculo de ahorro",
-    "Deuda inicial Fija": "Deuda inicial Fija",
-    "Mes_Año": "Mes_Año",
-    "Mes_Cobro": "Mes_Cobro",
-    "AM/DB": "AM/DB",
-    "Rango_AM_DB": "Rango_AM_DB",
-    "Rango_de_deuda": "Rango_de_deuda",
-    "FECHA DE BAJA": "FECHA DE BAJA",
-    "FECHA DE GRADUACIÓN": "FECHA DE GRADUACIÓN",
-    "CM Condonada $": "CM Condonada $",
-    "CE Condonada $": "CE Condonada $",
-    "MES_BASE": "MES_BASE",
-    "monthly_payment": "monthly_payment",
-    "begin_of_program": "begin_of_program",
-    "type": "type",
-}
 
-# =========================================================
-# FUNCIONES AUXILIARES
-# =========================================================
 def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -46,15 +17,8 @@ def normalizar_columnas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def parse_mes_anyo(valor):
-    """
-    Espera formatos como:
-    - 06-2025
-    - 6-2025
-    - 06/2025
-    """
     if pd.isna(valor):
         return pd.NaT
-
     s = str(valor).strip().replace("/", "-")
     try:
         return pd.to_datetime("01-" + s, format="%d-%m-%Y", errors="coerce")
@@ -71,23 +35,22 @@ def meses_entre(fecha_inicio, fecha_fin):
 def preparar_df(df: pd.DataFrame) -> pd.DataFrame:
     df = normalizar_columnas(df)
 
-    # Crear columnas faltantes si no existen
-    for col in COLUMNAS_ESPERADAS:
+    columnas_necesarias = [
+        "Referencia", "Credito", "Tipo de comision", "Fecha de cobro", "Monto",
+        "Apartado Mensual", "Vehiculo de ahorro", "Deuda inicial Fija",
+        "Mes_Año", "Mes_Cobro", "AM/DB", "Rango_AM_DB", "Rango_de_deuda",
+        "FECHA DE BAJA", "FECHA DE GRADUACIÓN", "CM Condonada $", "CE Condonada $",
+        "MES_BASE", "monthly_payment", "begin_of_program", "type"
+    ]
+    for col in columnas_necesarias:
         if col not in df.columns:
             df[col] = np.nan
 
-    # Tipos
-    cols_numericas = [
-        "Monto",
-        "Apartado Mensual",
-        "Deuda inicial Fija",
-        "Mes_Cobro",
-        "AM/DB",
-        "CM Condonada $",
-        "CE Condonada $",
-        "monthly_payment",
+    numericas = [
+        "Monto", "Apartado Mensual", "Deuda inicial Fija", "Mes_Cobro",
+        "AM/DB", "CM Condonada $", "CE Condonada $", "monthly_payment"
     ]
-    for col in cols_numericas:
+    for col in numericas:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df["Fecha de cobro"] = pd.to_datetime(df["Fecha de cobro"], errors="coerce")
@@ -97,24 +60,26 @@ def preparar_df(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Referencia"] = df["Referencia"].astype(str).str.strip()
     df["Tipo de comision"] = df["Tipo de comision"].astype(str).str.strip()
+    df["Mes_Año"] = df["Mes_Año"].astype(str).str.strip()
 
-    # Originación
     df["fecha_originacion"] = df["Mes_Año"].apply(parse_mes_anyo)
+    df["Anio_Cosecha"] = df["fecha_originacion"].dt.year.astype("Int64").astype(str)
+    df.loc[df["fecha_originacion"].isna(), "Anio_Cosecha"] = "Sin año"
 
-    # Condonado: si cualquiera de las 2 tiene valor distinto de nulo y distinto de 0
     df["Condonado"] = np.where(
-        (
-            (df["CM Condonada $"].fillna(0) != 0)
-            | (df["CE Condonada $"].fillna(0) != 0)
-        ),
+        (df["CM Condonada $"].fillna(0) != 0) | (df["CE Condonada $"].fillna(0) != 0),
         "Sí",
         "No"
     )
 
-    # Crédito
-    df["Credito"] = df["Credito"].astype(str).str.strip().str.lower().map(
-        {"true": "True", "false": "False", "verdadero": "True", "falso": "False"}
-    ).fillna(df["Credito"].astype(str))
+    df["Credito"] = (
+        df["Credito"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map({"true": "True", "false": "False", "verdadero": "True", "falso": "False"})
+        .fillna(df["Credito"].astype(str))
+    )
 
     return df
 
@@ -142,41 +107,11 @@ def cargar_datos_fijos():
     return None, "No se encontró base fija en data/."
 
 
-@st.cache_data(show_spinner=False)
-def cargar_desde_upload(archivo):
-    nombre = archivo.name.lower()
-
-    if nombre.endswith(".parquet"):
-        df = pd.read_parquet(archivo)
-    elif nombre.endswith(".csv"):
-        try:
-            df = pd.read_csv(archivo, encoding="utf-8", sep=",")
-            if df.shape[1] == 1:
-                archivo.seek(0)
-                df = pd.read_csv(archivo, encoding="utf-8", sep=";")
-        except Exception:
-            archivo.seek(0)
-            df = pd.read_csv(archivo, encoding="latin-1", sep=",")
-            if df.shape[1] == 1:
-                archivo.seek(0)
-                df = pd.read_csv(archivo, encoding="latin-1", sep=";")
-    elif nombre.endswith(".xlsx") or nombre.endswith(".xls"):
-        xls = pd.ExcelFile(archivo)
-        hoja = xls.sheet_names[0]
-        df = pd.read_excel(xls, sheet_name=hoja)
-    else:
-        raise ValueError("Formato no soportado")
-
-    return preparar_df(df)
-
-
 def construir_clientes(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Tabla única por Referencia para análisis de baja / graduación / condonación.
-    """
-    agg = df.groupby("Referencia", dropna=False).agg(
+    clientes = df.groupby("Referencia", dropna=False).agg(
         fecha_originacion=("fecha_originacion", "min"),
         Mes_Año=("Mes_Año", "first"),
+        Anio_Cosecha=("Anio_Cosecha", "first"),
         Credito=("Credito", "first"),
         FECHA_DE_BAJA=("FECHA DE BAJA", "max"),
         FECHA_DE_GRADUACION=("FECHA DE GRADUACIÓN", "max"),
@@ -187,17 +122,17 @@ def construir_clientes(df: pd.DataFrame) -> pd.DataFrame:
         Rango_de_deuda=("Rango_de_deuda", "first"),
     ).reset_index()
 
-    agg["mes_baja"] = agg.apply(
+    clientes["mes_baja"] = clientes.apply(
         lambda r: meses_entre(r["fecha_originacion"], r["FECHA_DE_BAJA"]), axis=1
     )
-    agg["mes_graduacion"] = agg.apply(
+    clientes["mes_graduacion"] = clientes.apply(
         lambda r: meses_entre(r["fecha_originacion"], r["FECHA_DE_GRADUACION"]), axis=1
     )
 
-    agg["estado_cliente"] = np.select(
+    clientes["estado_cliente"] = np.select(
         [
-            agg["FECHA_DE_GRADUACION"].notna(),
-            agg["FECHA_DE_BAJA"].notna(),
+            clientes["FECHA_DE_GRADUACION"].notna(),
+            clientes["FECHA_DE_BAJA"].notna(),
         ],
         [
             "Graduado",
@@ -205,134 +140,158 @@ def construir_clientes(df: pd.DataFrame) -> pd.DataFrame:
         ],
         default="Activo"
     )
+    return clientes
 
-    return agg
+
+def aplicar_filtros(df, clientes, anios_sel, tipos_sel, credito_sel):
+    df_f = df.copy()
+    clientes_f = clientes.copy()
+
+    if anios_sel:
+        df_f = df_f[df_f["Anio_Cosecha"].isin(anios_sel)]
+        clientes_f = clientes_f[clientes_f["Anio_Cosecha"].isin(anios_sel)]
+
+    if tipos_sel:
+        df_f = df_f[df_f["Tipo de comision"].isin(tipos_sel)]
+
+    if credito_sel != "Todos":
+        clientes_f = clientes_f[clientes_f["Credito"] == credito_sel]
+        refs_validas = set(clientes_f["Referencia"])
+        df_f = df_f[df_f["Referencia"].isin(refs_validas)]
+
+    return df_f, clientes_f
 
 
-def resumen_cosechas(clientes: pd.DataFrame, df_cobros: pd.DataFrame) -> pd.DataFrame:
-    base_clientes = clientes.groupby("Mes_Año", dropna=False).agg(
+def resumen_anual(clientes: pd.DataFrame, df_cobros: pd.DataFrame) -> pd.DataFrame:
+    base_clientes = clientes.groupby("Anio_Cosecha", dropna=False).agg(
         clientes=("Referencia", "nunique"),
         condonados=("Condonado", lambda x: (x == "Sí").sum()),
         graduados=("estado_cliente", lambda x: (x == "Graduado").sum()),
         bajas=("estado_cliente", lambda x: (x == "Baja").sum()),
         activos=("estado_cliente", lambda x: (x == "Activo").sum()),
+        deuda_total=("Deuda_inicial_Fija", "sum"),
     ).reset_index()
 
-    base_cobros = df_cobros.groupby("Mes_Año", dropna=False).agg(
-        monto_total=("Monto", "sum"),
+    base_cobros = df_cobros.groupby("Anio_Cosecha", dropna=False).agg(
+        cobro_total=("Monto", "sum"),
         transacciones=("Monto", "size"),
     ).reset_index()
 
-    out = base_clientes.merge(base_cobros, on="Mes_Año", how="left")
-    out["monto_total"] = out["monto_total"].fillna(0)
+    out = base_clientes.merge(base_cobros, on="Anio_Cosecha", how="left")
+    out["cobro_total"] = out["cobro_total"].fillna(0)
     out["transacciones"] = out["transacciones"].fillna(0).astype(int)
-    out["pct_condonados"] = np.where(out["clientes"] > 0, out["condonados"] / out["clientes"], 0.0)
-    out["pct_graduados"] = np.where(out["clientes"] > 0, out["graduados"] / out["clientes"], 0.0)
-    out["pct_bajas"] = np.where(out["clientes"] > 0, out["bajas"] / out["clientes"], 0.0)
-    return out.sort_values("Mes_Año")
+    out["pct_bajas"] = np.where(out["clientes"] > 0, out["bajas"] / out["clientes"], 0)
+    out["pct_graduados"] = np.where(out["clientes"] > 0, out["graduados"] / out["clientes"], 0)
+    out["pct_condonados"] = np.where(out["clientes"] > 0, out["condonados"] / out["clientes"], 0)
+    return out.sort_values("Anio_Cosecha")
 
 
-def curva_cobros(df: pd.DataFrame, acumulado=False) -> pd.DataFrame:
-    out = (
-        df.groupby(["Mes_Año", "Mes_Cobro", "Tipo de comision", "Condonado"], dropna=False)["Monto"]
-        .sum()
+def curva_cobros_anual(df_f: pd.DataFrame, clientes_f: pd.DataFrame, modo="Suma total", acumulado=False):
+    # Base cliente-año-condonado para deuda total por grupo
+    base_deuda = (
+        clientes_f.groupby(["Anio_Cosecha", "Condonado"], dropna=False)
+        .agg(
+            clientes=("Referencia", "nunique"),
+            deuda_total=("Deuda_inicial_Fija", "sum")
+        )
         .reset_index()
-        .sort_values(["Mes_Año", "Tipo de comision", "Condonado", "Mes_Cobro"])
     )
 
-    if acumulado:
-        out["Monto"] = (
-            out.groupby(["Mes_Año", "Tipo de comision", "Condonado"])["Monto"]
-            .cumsum()
+    cobros = (
+        df_f.groupby(["Anio_Cosecha", "Mes_Cobro", "Condonado"], dropna=False)
+        .agg(
+            monto_total=("Monto", "sum"),
+            clientes_con_cobro=("Referencia", "nunique")
         )
-    return out
+        .reset_index()
+        .sort_values(["Anio_Cosecha", "Condonado", "Mes_Cobro"])
+    )
+
+    cobros = cobros.merge(base_deuda, on=["Anio_Cosecha", "Condonado"], how="left")
+
+    if modo == "Suma total":
+        cobros["Valor"] = cobros["monto_total"]
+
+    elif modo == "Promedio por cliente":
+        cobros["Valor"] = np.where(cobros["clientes"] > 0, cobros["monto_total"] / cobros["clientes"], 0)
+
+    elif modo == "Promedio ponderado por deuda":
+        cobros["Valor"] = np.where(cobros["deuda_total"] > 0, cobros["monto_total"] / cobros["deuda_total"], 0)
+
+    if acumulado:
+        cobros["Valor"] = (
+            cobros.groupby(["Anio_Cosecha", "Condonado"])["Valor"].cumsum()
+        )
+
+    return cobros
 
 
-def curva_evento(clientes: pd.DataFrame, columna_mes: str, etiqueta: str) -> pd.DataFrame:
-    tmp = clientes[clientes[columna_mes].notna()].copy()
+def curva_evento_anual(clientes_f: pd.DataFrame, columna_mes: str):
+    tmp = clientes_f[clientes_f[columna_mes].notna()].copy()
+    if tmp.empty:
+        return tmp
+
     tmp[columna_mes] = tmp[columna_mes].astype(int)
 
-    out = (
-        tmp.groupby(["Mes_Año", columna_mes, "Condonado"], dropna=False)["Referencia"]
+    eventos = (
+        tmp.groupby(["Anio_Cosecha", columna_mes, "Condonado"], dropna=False)["Referencia"]
         .nunique()
-        .reset_index(name="Clientes")
-        .sort_values(["Mes_Año", "Condonado", columna_mes])
+        .reset_index(name="clientes_evento")
+        .sort_values(["Anio_Cosecha", "Condonado", columna_mes])
     )
 
     base = (
-        clientes.groupby(["Mes_Año", "Condonado"], dropna=False)["Referencia"]
+        clientes_f.groupby(["Anio_Cosecha", "Condonado"], dropna=False)["Referencia"]
         .nunique()
-        .reset_index(name="Base_Clientes")
+        .reset_index(name="base_clientes")
     )
 
-    out = out.merge(base, on=["Mes_Año", "Condonado"], how="left")
-    out["Pct"] = np.where(out["Base_Clientes"] > 0, out["Clientes"] / out["Base_Clientes"], 0.0)
-    out["Evento"] = etiqueta
-    return out
+    eventos = eventos.merge(base, on=["Anio_Cosecha", "Condonado"], how="left")
+    eventos["pct"] = np.where(eventos["base_clientes"] > 0, eventos["clientes_evento"] / eventos["base_clientes"], 0)
+    return eventos
 
 
-# =========================================================
-# CARGA DE DATOS
-# =========================================================
-st.title("📊 Dashboard de Cosechas - Mensualidades")
+st.title("📊 Dashboard Anual de Cobros, Bajas y Graduaciones")
 
 df, origen_msg = cargar_datos_fijos()
-
-with st.expander("Carga de datos", expanded=False):
-    st.write(origen_msg)
-    archivo = st.file_uploader(
-        "Si quieres reemplazar temporalmente la base fija, sube otro archivo aquí",
-        type=["parquet", "csv", "xlsx", "xls"]
-    )
-    if archivo is not None:
-        df = cargar_desde_upload(archivo)
-        st.success("Usando archivo subido manualmente en esta sesión")
-
 if df is None:
-    st.warning("No hay base fija cargada. Sube un archivo o agrega data/df_cc.parquet al repo.")
+    st.error("No encontré la base fija. Debes subir data/df_cc.parquet o data/df_cc.csv al repo.")
     st.stop()
 
 clientes = construir_clientes(df)
 
-# =========================================================
-# SIDEBAR
-# =========================================================
+with st.expander("Fuente de datos", expanded=False):
+    st.write(origen_msg)
+
 st.sidebar.header("Filtros")
 
-cosechas_disponibles = sorted([x for x in df["Mes_Año"].dropna().astype(str).unique().tolist()])
-tipos_disponibles = sorted([x for x in df["Tipo de comision"].dropna().astype(str).unique().tolist()])
-condonado_opts = ["Todos", "Sí", "No"]
-credito_opts = ["Todos"] + sorted([x for x in clientes["Credito"].dropna().astype(str).unique().tolist()])
+anios_disponibles = sorted([x for x in df["Anio_Cosecha"].dropna().unique().tolist() if x != "Sin año"])
+tipos_disponibles = sorted(df["Tipo de comision"].dropna().astype(str).unique().tolist())
+credito_opts = ["Todos"] + sorted(clientes["Credito"].dropna().astype(str).unique().tolist())
 
-cosechas_sel = st.sidebar.multiselect("Cosecha (Mes_Año)", cosechas_disponibles, default=cosechas_disponibles[:5] if len(cosechas_disponibles) > 5 else cosechas_disponibles)
-tipos_sel = st.sidebar.multiselect("Tipo de comisión", tipos_disponibles, default=tipos_disponibles)
-condonado_sel = st.sidebar.selectbox("Condonado", condonado_opts, index=0)
+anios_sel = st.sidebar.multiselect(
+    "Año de cosecha",
+    anios_disponibles,
+    default=anios_disponibles
+)
+
+tipos_sel = st.sidebar.multiselect(
+    "Tipos de comisión a incluir",
+    tipos_disponibles,
+    default=tipos_disponibles
+)
+
 credito_sel = st.sidebar.selectbox("Crédito", credito_opts, index=0)
-ver_pct = st.sidebar.checkbox("Ver bajas / graduaciones en porcentaje", value=True)
 
-df_f = df.copy()
-clientes_f = clientes.copy()
+modo_metrica = st.sidebar.selectbox(
+    "Métrica de cobro",
+    ["Suma total", "Promedio por cliente", "Promedio ponderado por deuda"]
+)
 
-if cosechas_sel:
-    df_f = df_f[df_f["Mes_Año"].astype(str).isin(cosechas_sel)]
-    clientes_f = clientes_f[clientes_f["Mes_Año"].astype(str).isin(cosechas_sel)]
+ver_pct_eventos = st.sidebar.checkbox("Ver bajas/graduaciones en porcentaje", value=True)
 
-if tipos_sel:
-    df_f = df_f[df_f["Tipo de comision"].astype(str).isin(tipos_sel)]
-
-if condonado_sel != "Todos":
-    df_f = df_f[df_f["Condonado"] == condonado_sel]
-    clientes_f = clientes_f[clientes_f["Condonado"] == condonado_sel]
-
-if credito_sel != "Todos":
-    clientes_f = clientes_f[clientes_f["Credito"].astype(str) == credito_sel]
-    refs_validas = set(clientes_f["Referencia"])
-    df_f = df_f[df_f["Referencia"].isin(refs_validas)]
-
-# =========================================================
-# KPIs
-# =========================================================
-resumen = resumen_cosechas(clientes_f, df_f)
+df_f, clientes_f = aplicar_filtros(df, clientes, anios_sel, tipos_sel, credito_sel)
+resumen = resumen_anual(clientes_f, df_f)
 
 k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Clientes únicos", f"{clientes_f['Referencia'].nunique():,}")
@@ -341,105 +300,119 @@ k3.metric("Bajas", f"{(clientes_f['estado_cliente'] == 'Baja').sum():,}")
 k4.metric("Graduados", f"{(clientes_f['estado_cliente'] == 'Graduado').sum():,}")
 k5.metric("Condonados", f"{(clientes_f['Condonado'] == 'Sí').sum():,}")
 
-st.subheader("Resumen por cosecha")
+st.subheader("Resumen anual")
 st.dataframe(resumen, use_container_width=True)
-
-# =========================================================
-# COBROS
-# =========================================================
-st.subheader("Curva de cobros por cosecha")
 
 tabs = st.tabs([
     "Cobro mensual",
     "Cobro acumulado",
     "Bajas",
     "Graduaciones",
-    "Clientes"
+    "Detalle clientes"
 ])
 
 with tabs[0]:
-    cobros_mes = curva_cobros(df_f, acumulado=False)
-    if not cobros_mes.empty:
+    st.subheader("Curva anual de cobro mensual")
+    cobro_mensual = curva_cobros_anual(df_f, clientes_f, modo=modo_metrica, acumulado=False)
+
+    if not cobro_mensual.empty:
+        titulo_y = {
+            "Suma total": "Monto",
+            "Promedio por cliente": "Monto promedio por cliente",
+            "Promedio ponderado por deuda": "Cobro / deuda"
+        }[modo_metrica]
+
         fig = px.line(
-            cobros_mes,
+            cobro_mensual,
             x="Mes_Cobro",
-            y="Monto",
-            color="Mes_Año",
+            y="Valor",
+            color="Anio_Cosecha",
             line_dash="Condonado",
-            facet_col="Tipo de comision",
             markers=True,
-            title="Monto cobrado por mes desde originación"
+            title="Cobros por mes desde originación, agrupado por año"
         )
-        fig.update_layout(height=550)
+        fig.update_layout(yaxis_title=titulo_y, height=550)
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(cobros_mes, use_container_width=True)
+        st.dataframe(cobro_mensual, use_container_width=True)
     else:
-        st.info("No hay datos para la vista de cobro mensual.")
+        st.info("No hay datos para la curva de cobro mensual.")
 
 with tabs[1]:
-    cobros_acum = curva_cobros(df_f, acumulado=True)
-    if not cobros_acum.empty:
+    st.subheader("Curva anual de cobro acumulado")
+    cobro_acum = curva_cobros_anual(df_f, clientes_f, modo=modo_metrica, acumulado=True)
+
+    if not cobro_acum.empty:
+        titulo_y = {
+            "Suma total": "Monto acumulado",
+            "Promedio por cliente": "Promedio acumulado por cliente",
+            "Promedio ponderado por deuda": "Cobro acumulado / deuda"
+        }[modo_metrica]
+
         fig = px.line(
-            cobros_acum,
+            cobro_acum,
             x="Mes_Cobro",
-            y="Monto",
-            color="Mes_Año",
+            y="Valor",
+            color="Anio_Cosecha",
             line_dash="Condonado",
-            facet_col="Tipo de comision",
             markers=True,
-            title="Cobro acumulado por mes desde originación"
+            title="Cobro acumulado por mes desde originación, agrupado por año"
         )
-        fig.update_layout(height=550)
+        fig.update_layout(yaxis_title=titulo_y, height=550)
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(cobros_acum, use_container_width=True)
+        st.dataframe(cobro_acum, use_container_width=True)
     else:
-        st.info("No hay datos para la vista de cobro acumulado.")
+        st.info("No hay datos para la curva de cobro acumulado.")
 
 with tabs[2]:
-    bajas = curva_evento(clientes_f, "mes_baja", "Baja")
+    st.subheader("Curva de bajas")
+    bajas = curva_evento_anual(clientes_f, "mes_baja")
+
     if not bajas.empty:
-        ycol = "Pct" if ver_pct else "Clientes"
+        ycol = "pct" if ver_pct_eventos else "clientes_evento"
+        ytitle = "Porcentaje de bajas" if ver_pct_eventos else "Clientes con baja"
+
         fig = px.line(
             bajas,
             x="mes_baja",
             y=ycol,
-            color="Mes_Año",
+            color="Anio_Cosecha",
             line_dash="Condonado",
             markers=True,
-            title="Curva de bajas por mes desde originación"
+            title="Bajas por mes desde originación, agrupado por año"
         )
-        fig.update_layout(height=500)
+        fig.update_layout(yaxis_title=ytitle, height=550)
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(bajas, use_container_width=True)
     else:
-        st.info("No hay clientes con baja para los filtros seleccionados.")
+        st.info("No hay bajas para los filtros seleccionados.")
 
 with tabs[3]:
-    grads = curva_evento(clientes_f, "mes_graduacion", "Graduación")
+    st.subheader("Curva de graduaciones")
+    grads = curva_evento_anual(clientes_f, "mes_graduacion")
+
     if not grads.empty:
-        ycol = "Pct" if ver_pct else "Clientes"
+        ycol = "pct" if ver_pct_eventos else "clientes_evento"
+        ytitle = "Porcentaje de graduaciones" if ver_pct_eventos else "Clientes graduados"
+
         fig = px.line(
             grads,
             x="mes_graduacion",
             y=ycol,
-            color="Mes_Año",
+            color="Anio_Cosecha",
             line_dash="Condonado",
             markers=True,
-            title="Curva de graduación por mes desde originación"
+            title="Graduaciones por mes desde originación, agrupado por año"
         )
-        fig.update_layout(height=500)
+        fig.update_layout(yaxis_title=ytitle, height=550)
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(grads, use_container_width=True)
     else:
-        st.info("No hay clientes graduados para los filtros seleccionados.")
+        st.info("No hay graduaciones para los filtros seleccionados.")
 
 with tabs[4]:
-    clientes_det = clientes_f.copy()
-    st.dataframe(clientes_det, use_container_width=True)
+    st.subheader("Detalle de clientes filtrados")
+    st.dataframe(clientes_f, use_container_width=True)
 
-# =========================================================
-# DESCARGAS
-# =========================================================
 st.subheader("Descargas")
 
 c1, c2, c3 = st.columns(3)
@@ -462,8 +435,8 @@ with c2:
 
 with c3:
     st.download_button(
-        "Descargar resumen cosechas",
+        "Descargar resumen anual",
         data=resumen.to_csv(index=False).encode("utf-8-sig"),
-        file_name="resumen_cosechas.csv",
+        file_name="resumen_anual.csv",
         mime="text/csv"
     )
