@@ -459,4 +459,4 @@ with tabs[3]:
         st.info("No hay graduaciones para los filtros seleccionados.")
 
 with tabs[4]:
-    st.dataframe(clientes_f, use_container_width=True))
+    st.dataframe(clientes_f, use_container_width=True)
